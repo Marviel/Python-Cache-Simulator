@@ -3,28 +3,59 @@
 # We will test your code with the test cases you developed.
 
 #TODO
-# - Modes
-# - Read from command line
-# - Associative
+# - Mode recognition
+# - Associative****
+# - AMAT Calculation
 
 import math
 import pprint
+import sys
+
+args = ["[input_file]",
+        "[block_size (int)]",
+        "[num_blocks (int)]",
+        "[associativity (1 for direct, 2 for set)]",
+        "[hit_time (float)]",
+        "[miss_time (float)]",
+        "[replacement_policy (1: Random, 2:LRU)]"]
+
+argstr = ""
+for a in args:
+  argstr += (" " + a)
+
+if len(sys.argv) != len(args) + 1:
+  print("USAGE: python3 cache_simulator.py" + argstr)
+  sys.exit(0)
+
+INPUT_FILE = sys.argv[1]
+BLOCK_SIZE = int(sys.argv[2])
+NUM_BLOCKS = int(sys.argv[3])
+ASSOC = int(sys.argv[4])
+HIT_TIME = float(sys.argv[5])
+MISS_TIME = float(sys.argv[6])
+REPLACEMENT = bool(sys.argv[7])
+# -Block size (number of words. Note that we don't differentiate in this project for
+# words and bytes. You can assume all addresses are referring to words, and no
+# further byte-word conversion is needed).
+# -Number of lines/blocks in the cache.
+# -Associativity (1 for direct, 2 for two-way set associative, etc.)
+# -Hit time (in cycles)
+# -Miss time (in cycles)
+# -Replacement policy: Random and LRU
 
 PP = pprint.PrettyPrinter(indent=4)
 
 
 #BLOCK_SIZE Only used by me to calculate tag_size
-BLOCK_SIZE = 1 #In Words/Bytes (synonymous here) 
-NUM_BLOCKS = 16 #In blocks :)
+# BLOCK_SIZE = 16 #In Words/Bytes (synonymous here) 
+# NUM_BLOCKS = 256 #In blocks :)
 ADDR_SIZE = 20
 
 # Returns cache address
 def direct_mapped_hash_fnc(addr, num_blocks):
   return addr % num_blocks
 
-def get_tag_size(offset,index):
-  #return ADDR_SIZE - (offset + index) I used to do this, but it didn't work.
-  return ADDR_SIZE - index
+
 
 #Prints out data about an array of numbers.
 def print_bookkeeping(nums):
@@ -55,27 +86,29 @@ def print_bookkeeping(nums):
   print("max addr: %d"%(max_addr))
 
 
-class Cache(object):
+class DirectMappedCache(object):
   #Contains array
   #[(index, v, tag, data)]
-  def __init__(self, block_size, num_blocks, associativity, hit_time, 
+  def __init__(self, block_size, num_blocks, hit_time, 
                 miss_time, replacement_policy):
 
+    # self.num_blocks = block_size * num_blocks #sorry. hackish...
+    # self.block_size = 1
     self.block_size = block_size
     self.num_blocks = num_blocks #cache size
-    self.associativity = associativity
     self.hit_time = hit_time
     self.miss_time = miss_time
     self.replacement_policy = replacement_policy
 
+
     #Calculations
     self.m = int(math.log(self.block_size, 2)) #num Bits for offset
     self.n = int(math.log(self.num_blocks, 2)) #num Index Bits
-    self.tag_size = get_tag_size(self.m, self.n) #num Tag bits
+    self.tag_size = self.get_tag_size() #num Tag bits
 
-    # The data in different forms:
-      # Direct Assoc: {(tag, data)}
-    self._store = {}
+    
+    self._store = {} # {(tag, data)}
+    self._blocks = {} # {[tag, data1, data2, ...]}
 
   #tag is the unique identifier for each entry
   #TODO valid bit is set when we know the tag has good data (all false at startup, etc)
@@ -83,30 +116,36 @@ class Cache(object):
   # def read(self, addr):
     #Will choose which read function based on the current mode, then execute it
 
+  def get_tag_size(self):
+    #       ...........(offset bits + index bits)
+    return ADDR_SIZE - (self.m + self.n) #I used to do this, but it didn't work.
 
   # Given an address in memory, checks if the cache contains that data yet.
   # If it does not, stores the data in the cache.
   # Returns:
   #   If found, returns true
   #   If not, returns None
-  def direct_mapped_read(self, addr):
-    ret = self.direct_mapped_ping_cache(addr)
+  def read(self, addr):
+    ret = self.ping_cache(addr)
 
     return ret
 
-  def direct_mapped_ping_cache(self, addr):
+  def ping_cache(self, addr):
     cache_addr = direct_mapped_hash_fnc(addr, self.num_blocks)
 
     #Bit shift by (ADDR_SIZE - tag_size) bits to get tag
-    shift = self.n
+    shift = self.n + self.m
     tag = addr >> shift
     # print("addr: %d gives tag: %d (shift %d)"%(addr,tag, shift))
 
-    if cache_addr in self._store and self._store[cache_addr][0] == tag: # If we have it in the cache...
+    if cache_addr in self._blocks and self._blocks[cache_addr][0] == tag: # If we have it in the cache...
       return True
     else: # If we don't...
       #Data in cache doesn't matter in this implementation, so store addr for debugging
-      self._store[cache_addr] = (tag,addr) 
+      arr = []
+      for i in range(self.block_size):
+        arr = [addr + i*8]
+      self._blocks[cache_addr] = [tag] + arr
       return False
 
   def print_stats(self):
@@ -118,29 +157,103 @@ class Cache(object):
 
   def print_contents(self):
     # PP.pprint(self._store)
-    for k in self._store.keys():
-      print("%d:%d"%(k,self._store[k][1]))
+    for k in self._blocks.keys():
+      print("%d:%d"%(k,self._blocks[k][1]))
 
 
-# READ PARAMS
-#(you may include default values and make these optional parameters for your
-# program):
-# -Block size (number of words. Note that we don't differentiate in this project for
-# words and bytes. You can assume all addresses are referring to words, and no
-# further byte-word conversion is needed).
-# -Number of lines/blocks in the cache.
-# -Associativity (1 for direct, 2 for two-way set associative, etc.)
-# -Hit time (in cycles)
-# -Miss time (in cycles)
-# -Replacement policy: Random and LRU
+class SetAssociativeCache(object):
+  #Contains array
+  #[(index, v, tag, data)]
+  def __init__(self, block_size, num_blocks, hit_time, 
+                miss_time, replacement_policy):
+
+    # self.num_blocks = block_size * num_blocks #sorry. hackish...
+    # self.block_size = 1
+    self.block_size = block_size
+    self.num_blocks = num_blocks #cache size
+    self.hit_time = hit_time
+    self.miss_time = miss_time
+    self.replacement_policy = replacement_policy
+
+
+    #Calculations
+    self.m = int(math.log(self.block_size, 2)) #num Bits for offset
+    self.n = int(math.log(self.num_blocks, 2)) #num Index Bits
+    self.tag_size = self.get_tag_size() #num Tag bits
+
+    
+    self._blocks = {} # {[tag, data1, data2, ...]}
+
+  #tag is the unique identifier for each entry
+  #TODO valid bit is set when we know the tag has good data (all false at startup, etc)
+
+  # def read(self, addr):
+    #Will choose which read function based on the current mode, then execute it
+
+  def get_tag_size(self):
+    #       ...........(offset bits + index bits)
+    return ADDR_SIZE - (self.m + self.n) #I used to do this, but it didn't work.
+
+  def get_tag_index(self, addr):
+    mask_str = '1'*self.tag_size + '0'*self.n + '0'*self.m
+    mask = int(mask_str,2)
+    return mask & addr
+
+  def get_block_index(self, addr):
+    mask_str = '0'*self.tag_size + '1'*self.n + '0'*self.m
+    mask = int(mask_str,2)
+    print("tag_size: %d, n: %d, m: %d ---> mask_str: %s"%(self.tag_size, self.n, self.m, mask_str))
+    return mask & addr
+
+  def get_offset_index(self, addr):
+    mask_str = '0'*self.tag_size + '0'*self.n + '1'*self.m
+    mask = int(mask_str,2)
+    return mask & addr
+
+  # Given an address in memory, checks if the cache contains that data yet.
+  # If it does not, stores the data in the cache.
+  # Returns:
+  #   If found, returns true
+  #   If not, returns None
+  def read(self, addr):
+    ret = self.ping_cache(addr)
+
+    return ret
+
+  def ping_cache(self, addr):
+    block_index = self.get_block_index(addr)
+
+    shift = self.n + self.m
+    tag = addr >> shift
+
+    if block_index in self._blocks and self._blocks[block_index][0] == tag: # If we have it in the cache...
+      return True
+    else: # If we don't...
+      #Data in cache doesn't matter in this implementation, so store addr for debugging
+      arr = []
+      for i in range(self.block_size):
+        arr = [addr + i*8]
+      self._blocks[block_index] = [tag] + arr
+      return False
+
+  def print_stats(self):
+    print("block_size: %d"%(self.block_size))
+    print("num_blocks: %d"%(self.num_blocks))
+    print("m: %d"%(self.m))
+    print("n: %d"%(self.n))
+    print("tag_size: %d"%(self.tag_size))
+
+  def print_contents(self):
+    # PP.pprint(self._store)
+    for k in self._blocks.keys():
+      print("%d:%d"%(k,self._blocks[k][1]))
 
 
 
-# Your program will be given a series of addresses (from an ASCII file that contains hex
-# addresses with one address per line). One such file is provided to you, available in the
-# assignment section of the blackboard system.
 
-cache = Cache(BLOCK_SIZE,NUM_BLOCKS, None, None, None, None)
+#-----------BEGIN SCRIPT----------------------------------------
+#---------------------------------------------------------------
+cache = SetAssociativeCache(BLOCK_SIZE,NUM_BLOCKS, None, None, None)
 print("-------STARTING CACHE STATS-------")
 cache.print_stats()
 print("-------------------------")
@@ -152,12 +265,12 @@ hit_cnt = 0
 hit = False
 instruction_cnt = 0
 s = []
-f = open("test_addresses.txt")
+f = open(INPUT_FILE)
 for line in f:
   addr = int(line, 0)
   s.append(addr)
   
-  hit = cache.direct_mapped_read(addr)
+  hit = cache.read(addr)
   if hit:
     hit_cnt += 1 
     print("%d hit!"%(addr))
