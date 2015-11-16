@@ -2,22 +2,18 @@
 # we discussed in class and in your book. Your cache only needs to support reads. 
 # We will test your code with the test cases you developed.
 
-#TODO
-# - Mode recognition
-# - Associative****
-# - AMAT Calculation
-
 import math
 import pprint
 import sys
+import random
 
 args = ["[input_file]",
         "[block_size (int)]",
         "[num_blocks (int)]",
-        "[associativity (1 for direct, 2 for set)]",
+        "[associativity (0: direct, 1: set)]",
         "[hit_time (float)]",
         "[miss_time (float)]",
-        "[replacement_policy (1: Random, 2:LRU)]"]
+        "[replacement_policy (0: Random, 1: LRU)]"]
 
 argstr = ""
 for a in args:
@@ -30,10 +26,11 @@ if len(sys.argv) != len(args) + 1:
 INPUT_FILE = sys.argv[1]
 BLOCK_SIZE = int(sys.argv[2])
 NUM_BLOCKS = int(sys.argv[3])
-ASSOC = int(sys.argv[4])
+ASSOC = bool(sys.argv[4])
 HIT_TIME = float(sys.argv[5])
 MISS_TIME = float(sys.argv[6])
 REPLACEMENT = bool(sys.argv[7])
+COLL_SIZE = 2 # set associativity number? N?
 # -Block size (number of words. Note that we don't differentiate in this project for
 # words and bytes. You can assume all addresses are referring to words, and no
 # further byte-word conversion is needed).
@@ -107,18 +104,27 @@ class DirectMappedCache(object):
     self.tag_size = self.get_tag_size() #num Tag bits
 
     
-    self._store = {} # {(tag, data)}
-    self._blocks = {} # {[tag, data1, data2, ...]}
-
-  #tag is the unique identifier for each entry
-  #TODO valid bit is set when we know the tag has good data (all false at startup, etc)
-
-  # def read(self, addr):
-    #Will choose which read function based on the current mode, then execute it
+    self._blocks = {} # {block_index: [tag, data1, data2, ...]}
 
   def get_tag_size(self):
     #       ...........(offset bits + index bits)
     return ADDR_SIZE - (self.m + self.n) #I used to do this, but it didn't work.
+
+  def get_tag_index(self, addr):
+    mask_str = '1'*self.tag_size + '0'*self.n + '0'*self.m
+    mask = int(mask_str,2)
+    return mask & addr
+
+  def get_block_index(self, addr):
+    mask_str = '0'*self.tag_size + '1'*self.n + '0'*self.m
+    mask = int(mask_str,2)
+    #print("tag_size: %d, n: %d, m: %d ---> mask_str: %s"%(self.tag_size, self.n, self.m, mask_str))
+    return mask & addr
+
+  def get_offset_index(self, addr):
+    mask_str = '0'*self.tag_size + '0'*self.n + '1'*self.m
+    mask = int(mask_str,2)
+    return mask & addr
 
   # Given an address in memory, checks if the cache contains that data yet.
   # If it does not, stores the data in the cache.
@@ -131,21 +137,19 @@ class DirectMappedCache(object):
     return ret
 
   def ping_cache(self, addr):
-    cache_addr = direct_mapped_hash_fnc(addr, self.num_blocks)
+    block_index = self.get_block_index(addr)
 
-    #Bit shift by (ADDR_SIZE - tag_size) bits to get tag
     shift = self.n + self.m
     tag = addr >> shift
-    # print("addr: %d gives tag: %d (shift %d)"%(addr,tag, shift))
 
-    if cache_addr in self._blocks and self._blocks[cache_addr][0] == tag: # If we have it in the cache...
+    if block_index in self._blocks and self._blocks[block_index][0] == tag: # If we have it in the cache...
       return True
     else: # If we don't...
       #Data in cache doesn't matter in this implementation, so store addr for debugging
       arr = []
-      for i in range(self.block_size):
+      for i in range(self.block_size): #this part isn't perfect yet.
         arr = [addr + i*8]
-      self._blocks[cache_addr] = [tag] + arr
+      self._blocks[block_index] = [tag] + arr
       return False
 
   def print_stats(self):
@@ -182,7 +186,7 @@ class SetAssociativeCache(object):
     self.tag_size = self.get_tag_size() #num Tag bits
 
     
-    self._blocks = {} # {[tag, data1, data2, ...]}
+    self._blocks = {} # {block_index: [[tag, data1, data2, ...]]}
 
   #tag is the unique identifier for each entry
   #TODO valid bit is set when we know the tag has good data (all false at startup, etc)
@@ -202,7 +206,6 @@ class SetAssociativeCache(object):
   def get_block_index(self, addr):
     mask_str = '0'*self.tag_size + '1'*self.n + '0'*self.m
     mask = int(mask_str,2)
-    print("tag_size: %d, n: %d, m: %d ---> mask_str: %s"%(self.tag_size, self.n, self.m, mask_str))
     return mask & addr
 
   def get_offset_index(self, addr):
@@ -217,7 +220,6 @@ class SetAssociativeCache(object):
   #   If not, returns None
   def read(self, addr):
     ret = self.ping_cache(addr)
-
     return ret
 
   def ping_cache(self, addr):
@@ -226,15 +228,37 @@ class SetAssociativeCache(object):
     shift = self.n + self.m
     tag = addr >> shift
 
-    if block_index in self._blocks and self._blocks[block_index][0] == tag: # If we have it in the cache...
-      return True
-    else: # If we don't...
+    if block_index in self._blocks:
+      for slot in self._blocks[block_index]:
+        if slot[0] == tag:
+          # If we have it in the cache...
+          return True
+
+      # If we got here, we don't have this entry. So, we add it.
+      self.write_slot(block_index, tag, addr)
+      return False # We don't have it, then.
+
+    else: # If we don't have anything....
       #Data in cache doesn't matter in this implementation, so store addr for debugging
       arr = []
-      for i in range(self.block_size):
-        arr = [addr + i*8]
-      self._blocks[block_index] = [tag] + arr
+
+      for i in range(COLL_SIZE):
+        slot = []
+        slot = [-1 for x in range(self.block_size + 1)]
+        arr.append(slot)
+
+      #print(arr)
+      
+      self._blocks[block_index] = arr
+      self.write_slot(block_index,tag,addr)
       return False
+
+  def write_slot(self, block_index, tag, addr):
+    slot_to_overwrite = random.randint(0,COLL_SIZE - 1)
+    arr = []
+    for i in range(self.block_size):
+      arr = [addr + i*8]
+    self._blocks[block_index][slot_to_overwrite] = [tag] + arr
 
   def print_stats(self):
     print("block_size: %d"%(self.block_size))
@@ -253,7 +277,10 @@ class SetAssociativeCache(object):
 
 #-----------BEGIN SCRIPT----------------------------------------
 #---------------------------------------------------------------
-cache = SetAssociativeCache(BLOCK_SIZE,NUM_BLOCKS, None, None, None)
+if ASSOC:
+  cache = SetAssociativeCache(BLOCK_SIZE,NUM_BLOCKS, None, None, None)
+else:
+  cache = DirectMappedCache(BLOCK_SIZE,NUM_BLOCKS, None, None, None)
 print("-------STARTING CACHE STATS-------")
 cache.print_stats()
 print("-------------------------")
@@ -277,35 +304,31 @@ for line in f:
   else:
     print("%d miss"%(addr))
 
-  # print(addr)
-  # print("  " + str(hit))
   instruction_cnt += 1
   if instruction_cnt % 250 == 0: print("addresses loaded: %d"%(instruction_cnt))
 print("------------------------------")
 
-# print("BOOKKEEPING--------")
-# print_bookkeeping(s)
-# print("--------------------")
 
+
+
+if not ASSOC:
+  print("--------CACHE CONTENTS------")
+  cache.print_contents()
+  print("----------------------------")
+
+
+# Calculate statistics and exit.
 hit_rate = (1.0*hit_cnt)/(1.0*instruction_cnt)
-
-print("--------CACHE CONTENTS------")
-cache.print_contents()
-print("----------------------------")
-
+miss_cnt = instruction_cnt - hit_cnt
+miss_rate = (1.0*miss_cnt)/(1.0*instruction_cnt)
+amat = HIT_TIME + (miss_rate * MISS_TIME)
 print("TOTAL HITS: %d, TOTAL INSTRUCTIONS: %d"%(hit_cnt,instruction_cnt))
 print("HIT RATIO: %f"%(hit_rate))
+print("AMAT: %f"%(amat))
 
-print("-------ENDING CACHE STATS-------")
-cache.print_stats()
-print("-------------------------")
+# print("-------ENDING CACHE STATS-------")
+# cache.print_stats()
+# print("-------------------------")
 
-
-# Given this input and for the cache as
-# parameterized at the command line, compute the hit/miss rate and the AMAT. 
-
-
-# miss_rate = misses / instruction_cnt
-# amat = hit_time + (miss_rate * miss_time)
 
 
