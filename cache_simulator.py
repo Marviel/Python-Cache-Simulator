@@ -26,7 +26,7 @@ if len(sys.argv) != len(args) + 1:
 INPUT_FILE = sys.argv[1]
 BLOCK_SIZE = int(sys.argv[2])
 NUM_BLOCKS = int(sys.argv[3])
-ASSOC = bool(sys.argv[4])
+ASSOC = sys.argv[4] == "1"
 HIT_TIME = float(sys.argv[5])
 MISS_TIME = float(sys.argv[6])
 REPLACEMENT = bool(sys.argv[7])
@@ -278,11 +278,16 @@ class SetAssociativeCache(object):
 #-----------BEGIN SCRIPT----------------------------------------
 #---------------------------------------------------------------
 if ASSOC:
+  print("Associative")
   cache = SetAssociativeCache(BLOCK_SIZE,NUM_BLOCKS, None, None, None)
 else:
+  print("Direct")
   cache = DirectMappedCache(BLOCK_SIZE,NUM_BLOCKS, None, None, None)
+
+
 print("-------STARTING CACHE STATS-------")
 cache.print_stats()
+print("Associative: %d"%(ASSOC))
 print("-------------------------")
 
 
